@@ -78,7 +78,8 @@ button.link {
   gap: 12px;
 }
 
-.progress {
+.progress,
+.hint {
   font-size: 13px;
   color: var(--text);
   margin: 0;

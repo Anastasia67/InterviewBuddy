@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { startSession, sendAnswerAction, endSession, streamText } from './api'
 import './App.css'
 
-const INITIAL_CONFIG = { track: 'behavioral', mode: 'quick', difficulty: 'gentle', role: '' }
+const INITIAL_CONFIG = { track: 'behavioral', mode: 'quick', difficulty: 'gentle', role: '', company: '' }
 
 function SetupScreen({ onStart }) {
   const [config, setConfig] = useState(INITIAL_CONFIG)
@@ -57,9 +57,22 @@ function SetupScreen({ onStart }) {
         />
       </label>
 
+      <label>
+        Company you're interviewing with (optional)
+        <input
+          type="text"
+          placeholder="e.g. Stripe"
+          value={config.company}
+          onChange={update('company')}
+        />
+      </label>
+
       <button type="submit" disabled={loading}>
         {loading ? 'Starting…' : 'Start session'}
       </button>
+      {loading && (config.role || config.company) && (
+        <p className="hint">Tailoring questions to your role and company — this can take a few seconds…</p>
+      )}
     </form>
   )
 }

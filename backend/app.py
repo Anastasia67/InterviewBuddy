@@ -1,4 +1,5 @@
 import random
+import re
 import uuid
 from typing import Literal, Optional
 
@@ -55,6 +56,7 @@ class StartRequest(BaseModel):
     mode: Literal["quick", "full"]
     difficulty: Literal["gentle", "moderate", "challenging"] = "moderate"
     role: Optional[str] = None
+    company: Optional[str] = None
 
 
 class AnswerRequest(BaseModel):
@@ -82,9 +84,47 @@ def current_question_meta(session: dict) -> dict:
     return {"done": False, "question": session["questions"][index], "index": index, "total": total}
 
 
+def role_description(session: dict) -> str:
+    role = session["role"] or "the role they're applying for"
+    company = session.get("company")
+    return f"{role} at {company}" if company else role
+
+
+def generate_questions(track: str, role: Optional[str], company: Optional[str], count: int) -> list[str]:
+    context = f"a {track} interview for {role or 'the role'}"
+    if company:
+        context += f" at {company}"
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"You are an expert {track} interview coach who knows what questions "
+                "specific companies and roles are actually known to ask."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"List {count} realistic, specific interview questions for {context}. "
+                "Return only the questions, one per line, numbered 1 to "
+                f"{count}, no extra commentary."
+            ),
+        },
+    ]
+    response = ollama.chat(model=MODEL, messages=messages)
+    text = response["message"]["content"]
+
+    questions = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"^\s*\d+[\.\)]\s*", "", line).strip("-• ").strip()
+        if cleaned:
+            questions.append(cleaned)
+    return questions[:count]
+
+
 def feedback_system_prompt(session: dict) -> str:
     tone = TONE_BY_DIFFICULTY[session["difficulty"]]
-    role = session["role"] or "the role they're applying for"
+    role = role_description(session)
     return (
         f"You are a supportive {session['track']} interview coach helping a candidate "
         f"practice for {role}. Be {tone} "
@@ -107,13 +147,27 @@ def summary_system_prompt(session: dict) -> str:
 @app.post("/session/start")
 def start_session(req: StartRequest):
     bank = QUESTION_BANK[req.track]
-    questions = random.sample(bank, min(QUESTIONS_PER_SESSION, len(bank)))
+    count = min(QUESTIONS_PER_SESSION, len(bank))
+
+    questions = None
+    if req.role or req.company:
+        try:
+            generated = generate_questions(req.track, req.role, req.company, count)
+            if len(generated) >= count:
+                questions = generated[:count]
+        except Exception:
+            questions = None
+
+    if questions is None:
+        questions = random.sample(bank, count)
+
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
         "track": req.track,
         "mode": req.mode,
         "difficulty": req.difficulty,
         "role": req.role,
+        "company": req.company,
         "questions": questions,
         "index": 0,
         "answers": [None] * len(questions),
