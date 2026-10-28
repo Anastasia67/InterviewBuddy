@@ -1,11 +1,28 @@
 const API_BASE = 'http://127.0.0.1:8000'
 
 async function post(path, body) {
-  return fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+  let res
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new Error("Couldn't reach the server. Is the backend running?")
+  }
+
+  if (!res.ok) {
+    let message = `Something went wrong (error ${res.status}). Please try again.`
+    try {
+      const data = await res.json()
+      if (typeof data.detail === 'string') message = data.detail
+    } catch {
+      // response wasn't JSON; keep the generic message
+    }
+    throw new Error(message)
+  }
+  return res
 }
 
 export function startSession(config) {
@@ -25,9 +42,14 @@ export async function streamText(response, onChunk) {
   const decoder = new TextDecoder()
   let full = ''
   for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    full += decoder.decode(value, { stream: true })
+    let chunk
+    try {
+      chunk = await reader.read()
+    } catch {
+      throw new Error('Lost connection to the coach partway through. Please try again.')
+    }
+    if (chunk.done) break
+    full += decoder.decode(chunk.value, { stream: true })
     onChunk(full)
   }
   return full

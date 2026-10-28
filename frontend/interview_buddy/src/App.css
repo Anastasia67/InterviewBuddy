@@ -85,6 +85,16 @@ button.link {
   margin: 0;
 }
 
+.error {
+  font-size: 14px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  color: var(--text-h);
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+}
+
 .feedback,
 .summary-text {
   white-space: pre-wrap;

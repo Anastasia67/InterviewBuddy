@@ -7,14 +7,21 @@ const INITIAL_CONFIG = { track: 'behavioral', mode: 'quick', difficulty: 'gentle
 function SetupScreen({ onStart }) {
   const [config, setConfig] = useState(INITIAL_CONFIG)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
   const update = (key) => (e) => setConfig({ ...config, [key]: e.target.value })
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
-    await onStart(config)
-    setLoading(false)
+    setError('')
+    try {
+      await onStart(config)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -73,6 +80,7 @@ function SetupScreen({ onStart }) {
       {loading && (config.role || config.company) && (
         <p className="hint">Tailoring questions to your role and company — this can take a few seconds…</p>
       )}
+      {error && <p className="error" role="alert">{error}</p>}
     </form>
   )
 }
@@ -80,27 +88,36 @@ function SetupScreen({ onStart }) {
 function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly }) {
   const [answerText, setAnswerText] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
   const { mode, question, index, total, stage, feedback } = session
 
-  const submit = async () => {
-    if (!answerText.trim()) return
+  // Runs one action at a time; returns whether it succeeded.
+  const run = async (action) => {
     setLoading(true)
-    await onSubmit(answerText)
-    setLoading(false)
+    setError('')
+    try {
+      await action()
+      return true
+    } catch (err) {
+      setError(err.message)
+      return false
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const skip = async () => {
-    setLoading(true)
-    await onSkip()
-    setLoading(false)
+  const submit = () => {
+    if (!answerText.trim()) return
+    run(() => onSubmit(answerText))
   }
+
+  const skip = () => run(onSkip)
 
   const next = async () => {
-    setLoading(true)
-    await onNext()
-    setLoading(false)
-    setAnswerText('')
+    if (await run(onNext)) setAnswerText('')
   }
+
+  const endEarly = () => run(onEndEarly)
 
   return (
     <div className="session">
@@ -147,18 +164,21 @@ function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly 
         </>
       )}
 
-      <button onClick={onEndEarly} className="link">
+      {error && <p className="error" role="alert">{error}</p>}
+
+      <button onClick={endEarly} disabled={loading} className="link">
         End session now
       </button>
     </div>
   )
 }
 
-function SummaryScreen({ summary, onRestart }) {
+function SummaryScreen({ summary, error, onRestart }) {
   return (
     <div className="summary">
       <h1>Session summary</h1>
-      <div className="summary-text">{summary || '…'}</div>
+      {(summary || !error) && <div className="summary-text">{summary || '…'}</div>}
+      {error && <p className="error" role="alert">{error}</p>}
       <button onClick={onRestart}>Start another session</button>
     </div>
   )
@@ -169,6 +189,7 @@ function App() {
   const [sessionId, setSessionId] = useState(null)
   const [session, setSession] = useState(null)
   const [summary, setSummary] = useState('')
+  const [summaryError, setSummaryError] = useState('')
 
   const handleStart = async (config) => {
     const data = await startSession(config)
@@ -187,13 +208,18 @@ function App() {
   const goToSummary = async () => {
     const res = await endSession(sessionId)
     setSummary('')
-    if (session.mode === 'full') {
-      await streamText(res, setSummary)
-    } else {
-      const data = await res.json()
-      setSummary(data.summary)
-    }
+    setSummaryError('')
     setScreen('summary')
+    try {
+      if (session.mode === 'full') {
+        await streamText(res, setSummary)
+      } else {
+        const data = await res.json()
+        setSummary(data.summary)
+      }
+    } catch (err) {
+      setSummaryError(err.message)
+    }
   }
 
   const advance = async (res) => {
@@ -214,11 +240,16 @@ function App() {
 
   const handleSubmit = async (answerText) => {
     const res = await sendAnswerAction({ sessionId, action: 'answer', answer: answerText })
+    // Show the reviewing panel right away so quick-mode feedback is visible as it streams.
+    setSession((s) => ({ ...s, stage: 'reviewing', feedback: '' }))
     if (session.mode === 'quick') {
-      setSession((s) => ({ ...s, feedback: '' }))
-      await streamText(res, (partial) => setSession((s) => ({ ...s, feedback: partial })))
+      try {
+        await streamText(res, (partial) => setSession((s) => ({ ...s, feedback: partial })))
+      } catch (err) {
+        setSession((s) => ({ ...s, stage: 'answering', feedback: '' }))
+        throw err
+      }
     }
-    setSession((s) => ({ ...s, stage: 'reviewing' }))
   }
 
   const handleSkip = async () => {
@@ -239,6 +270,7 @@ function App() {
     setSessionId(null)
     setSession(null)
     setSummary('')
+    setSummaryError('')
     setScreen('setup')
   }
 
@@ -255,7 +287,7 @@ function App() {
           onEndEarly={goToSummary}
         />
       )}
-      {screen === 'summary' && <SummaryScreen summary={summary} onRestart={handleRestart} />}
+      {screen === 'summary' && <SummaryScreen summary={summary} error={summaryError} onRestart={handleRestart} />}
     </section>
   )
 }

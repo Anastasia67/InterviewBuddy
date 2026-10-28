@@ -1,3 +1,4 @@
+import itertools
 import random
 import re
 import uuid
@@ -175,13 +176,29 @@ def start_session(req: StartRequest):
     return {"session_id": session_id, **current_question_meta(sessions[session_id])}
 
 
+def open_stream(messages: list[dict]):
+    """Start a streaming chat and pull the first chunk, so an unreachable Ollama
+    becomes a 503 before we commit to a 200 streaming response."""
+    try:
+        stream = ollama.chat(model=MODEL, messages=messages, stream=True)
+        first = next(stream)
+    except Exception:
+        raise HTTPException(503, "The AI coach isn't available right now. Is Ollama running?")
+    return itertools.chain([first], stream)
+
+
 def stream_feedback(session: dict, index: int, question: str, answer: str):
     messages = [
         {"role": "system", "content": feedback_system_prompt(session)},
         {"role": "user", "content": f"Question: {question}\nCandidate's answer: {answer}"},
     ]
+    stream = open_stream(messages)
+    return _collect_feedback(session, index, question, answer, stream)
+
+
+def _collect_feedback(session: dict, index: int, question: str, answer: str, stream):
     feedback = ""
-    for chunk in ollama.chat(model=MODEL, messages=messages, stream=True):
+    for chunk in stream:
         piece = chunk["message"]["content"]
         feedback += piece
         yield piece
@@ -241,8 +258,7 @@ def stream_summary(session: dict):
         {"role": "system", "content": summary_system_prompt(session)},
         {"role": "user", "content": transcript},
     ]
-    for chunk in ollama.chat(model=MODEL, messages=messages, stream=True):
-        yield chunk["message"]["content"]
+    return (chunk["message"]["content"] for chunk in open_stream(messages))
 
 
 @app.post("/session/end")
