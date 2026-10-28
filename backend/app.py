@@ -1,14 +1,18 @@
 import itertools
 import random
 import re
+import sqlite3
 import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal, Optional
 
 import ollama
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 MODEL = "llama3"
 QUESTIONS_PER_SESSION = 5
@@ -40,6 +44,42 @@ TONE_BY_DIFFICULTY = {
     "challenging": "direct and rigorous like a real interviewer, while remaining respectful.",
 }
 
+DB_PATH = Path(__file__).with_name("steady.db")
+
+
+@contextmanager
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def init_db():
+    with db() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS history (
+                id TEXT PRIMARY KEY,
+                ended_at TEXT NOT NULL,
+                track TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                difficulty TEXT NOT NULL,
+                role TEXT,
+                company TEXT,
+                answered INTEGER NOT NULL,
+                skipped INTEGER NOT NULL,
+                total INTEGER NOT NULL,
+                summary TEXT,
+                confidence INTEGER
+            )"""
+        )
+
+
+init_db()
+
 app = FastAPI()
 
 app.add_middleware(
@@ -68,6 +108,10 @@ class AnswerRequest(BaseModel):
 
 class EndRequest(BaseModel):
     session_id: str
+
+
+class ConfidenceRequest(BaseModel):
+    confidence: int = Field(ge=1, le=5)
 
 
 def get_session(session_id: str) -> dict:
@@ -126,9 +170,21 @@ def generate_questions(track: str, role: Optional[str], company: Optional[str], 
 def feedback_system_prompt(session: dict) -> str:
     tone = TONE_BY_DIFFICULTY[session["difficulty"]]
     role = role_description(session)
-    return (
+    intro = (
         f"You are a supportive {session['track']} interview coach helping a candidate "
         f"practice for {role}. Be {tone} "
+    )
+    if session["track"] == "behavioral":
+        return intro + (
+            "After the candidate's answer, give feedback using the STAR framework. Begin "
+            "your reply directly with the Situation line, with no introduction. Write exactly "
+            "four short lines, one each for Situation, Task, Action and Result, rating each "
+            "with just one of the words clear, partly there or missing, for example "
+            "'Task: partly there - say what you were responsible for.' Then a blank line, "
+            "one sentence on what they did well, and one concrete suggestion to improve. "
+            "Do not ask a new question."
+        )
+    return intro + (
         "After the candidate's answer, give brief feedback in 2-4 sentences: one thing "
         "they did well, then one concrete suggestion to improve. Do not ask a new question."
     )
@@ -142,6 +198,12 @@ def summary_system_prompt(session: dict) -> str:
         "may have been skipped). Write an encouraging session summary: start with what "
         "the candidate did well, then name at most two focus areas for next time. Do not "
         "list every mistake."
+        + (
+            " Where it helps, frame focus areas around the STAR structure (Situation, "
+            "Task, Action, Result)."
+            if session["track"] == "behavioral"
+            else ""
+        )
     )
 
 
@@ -252,6 +314,8 @@ def stream_summary(session: dict):
             transcript_lines.append(f"Q{i}: {entry['question']}\nA{i}: (skipped)")
         else:
             transcript_lines.append(f"Q{i}: {entry['question']}\nA{i}: {entry['answer']}")
+    if not transcript_lines:
+        return iter(["No questions were answered this time - that's okay. Come back whenever you're ready."])
     transcript = "\n\n".join(transcript_lines)
 
     messages = [
@@ -266,9 +330,19 @@ def end_session(req: EndRequest):
     session = get_session(req.session_id)
 
     if session["mode"] == "full":
-        response = StreamingResponse(stream_summary(session), media_type="text/plain")
+        stream = stream_summary(session)
         del sessions[req.session_id]
-        return response
+
+        def stream_and_save():
+            summary = ""
+            try:
+                for piece in stream:
+                    summary += piece
+                    yield piece
+            finally:
+                save_history(req.session_id, session, summary)
+
+        return StreamingResponse(stream_and_save(), media_type="text/plain")
 
     lines = []
     for i, entry in enumerate(session["answers"], start=1):
@@ -280,4 +354,48 @@ def end_session(req: EndRequest):
             lines.append(f"Q{i}: {entry['question']}\n{entry['feedback']}")
     summary = "\n\n".join(lines) if lines else "No questions were answered."
     del sessions[req.session_id]
+    save_history(req.session_id, session, summary)
     return JSONResponse({"summary": summary})
+
+
+def save_history(session_id: str, session: dict, summary: str):
+    entries = [entry for entry in session["answers"] if entry is not None]
+    if not entries:
+        return
+    skipped = sum(1 for entry in entries if entry["skipped"])
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO history (id, ended_at, track, mode, difficulty, role, company, "
+            "answered, skipped, total, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                datetime.now(timezone.utc).isoformat(),
+                session["track"],
+                session["mode"],
+                session["difficulty"],
+                session["role"],
+                session["company"],
+                len(entries) - skipped,
+                skipped,
+                len(session["questions"]),
+                summary,
+            ),
+        )
+
+
+@app.get("/history")
+def history():
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM history ORDER BY ended_at DESC LIMIT 100").fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/history/{session_id}/confidence")
+def rate_session(session_id: str, req: ConfidenceRequest):
+    with db() as conn:
+        updated = conn.execute(
+            "UPDATE history SET confidence = ? WHERE id = ?", (req.confidence, session_id)
+        ).rowcount
+    if not updated:
+        raise HTTPException(404, "Session not found in history")
+    return {"saved": True}

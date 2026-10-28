@@ -1,15 +1,28 @@
 import { useState } from 'react'
-import { startSession, sendAnswerAction, endSession, streamText } from './api'
+import { startSession, sendAnswerAction, endSession, rateSession, streamText } from './api'
+import { useSpeechRecognition } from './useSpeechRecognition'
+import { CONFIDENCE_LABELS } from './confidence'
+import BreathingPause from './BreathingPause'
+import HistoryScreen from './HistoryScreen'
 import './App.css'
 
-const INITIAL_CONFIG = { track: 'behavioral', mode: 'quick', difficulty: 'gentle', role: '', company: '' }
+const INITIAL_CONFIG = {
+  track: 'behavioral',
+  mode: 'quick',
+  difficulty: 'gentle',
+  role: '',
+  company: '',
+  breathing: false,
+  showProgress: true,
+}
 
-function SetupScreen({ onStart }) {
+function SetupScreen({ onStart, onViewProgress }) {
   const [config, setConfig] = useState(INITIAL_CONFIG)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const update = (key) => (e) => setConfig({ ...config, [key]: e.target.value })
+  const toggle = (key) => (e) => setConfig({ ...config, [key]: e.target.checked })
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -27,7 +40,7 @@ function SetupScreen({ onStart }) {
   return (
     <form className="setup" onSubmit={handleSubmit}>
       <h1>InterviewBuddy</h1>
-      <p>A low-pressure space to practice interviews.</p>
+      <p>A low-pressure space to practice interviews. There's no timer. Take as long as you need.</p>
 
       <label>
         Track
@@ -74,6 +87,16 @@ function SetupScreen({ onStart }) {
         />
       </label>
 
+      <label className="checkbox">
+        <input type="checkbox" checked={config.breathing} onChange={toggle('breathing')} />
+        Take a short breathing pause before each question
+      </label>
+
+      <label className="checkbox">
+        <input type="checkbox" checked={config.showProgress} onChange={toggle('showProgress')} />
+        Show question count (e.g. "Question 2 of 5")
+      </label>
+
       <button type="submit" disabled={loading}>
         {loading ? 'Starting…' : 'Start session'}
       </button>
@@ -81,18 +104,24 @@ function SetupScreen({ onStart }) {
         <p className="hint">Tailoring questions to your role and company — this can take a few seconds…</p>
       )}
       {error && <p className="error" role="alert">{error}</p>}
+
+      <button type="button" onClick={onViewProgress} className="link">
+        View your progress
+      </button>
     </form>
   )
 }
 
-function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly }) {
+function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly, onReady }) {
   const [answerText, setAnswerText] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const { mode, question, index, total, stage, feedback } = session
+  const speech = useSpeechRecognition()
+  const { mode, track, question, index, total, stage, feedback, showProgress } = session
 
   // Runs one action at a time; returns whether it succeeded.
   const run = async (action) => {
+    speech.stop()
     setLoading(true)
     setError('')
     try {
@@ -111,7 +140,9 @@ function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly 
     run(() => onSubmit(answerText))
   }
 
-  const skip = () => run(onSkip)
+  const skip = async () => {
+    if (await run(onSkip)) setAnswerText('')
+  }
 
   const next = async () => {
     if (await run(onNext)) setAnswerText('')
@@ -119,26 +150,60 @@ function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly 
 
   const endEarly = () => run(onEndEarly)
 
+  const toggleVoice = () => {
+    if (speech.listening) speech.stop()
+    else speech.start(answerText, setAnswerText)
+  }
+
   return (
     <div className="session">
-      <p className="progress">
-        Question {index + 1} of {total}
-      </p>
-      <h2>{question}</h2>
+      {showProgress && (
+        <p className="progress">
+          Question {index + 1} of {total}
+        </p>
+      )}
+
+      {stage === 'breathing' ? (
+        <BreathingPause onDone={onReady} />
+      ) : (
+        <h2>{question}</h2>
+      )}
 
       {stage === 'answering' && (
         <>
+          <p className="hint">
+            Pausing to think is completely normal.
+            {track === 'behavioral' && ' Try walking through the Situation, Task, Action and Result.'}
+          </p>
           <textarea
             rows={6}
             value={answerText}
             onChange={(e) => setAnswerText(e.target.value)}
-            placeholder="Type your answer…"
+            placeholder={speech.supported ? 'Type your answer, or answer out loud with the mic…' : 'Type your answer…'}
             disabled={loading}
+            readOnly={speech.listening}
+            aria-label="Your answer"
           />
+          {speech.listening && (
+            <p className="listening" aria-live="polite">
+              <span className="listening-dot" aria-hidden="true" /> Listening… speak whenever you're ready.
+            </p>
+          )}
+          {speech.error && <p className="error" role="alert">{speech.error}</p>}
           <div className="actions">
             <button onClick={submit} disabled={loading || !answerText.trim()}>
               Submit answer
             </button>
+            {speech.supported && (
+              <button
+                onClick={toggleVoice}
+                disabled={loading}
+                className={speech.listening ? 'secondary active' : 'secondary'}
+                aria-pressed={speech.listening}
+              >
+                {speech.listening ? 'Stop speaking' : 'Answer out loud'}
+              </button>
+            )}
             <button onClick={skip} disabled={loading} className="secondary">
               Skip
             </button>
@@ -149,9 +214,11 @@ function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly 
       {stage === 'reviewing' && (
         <>
           {mode === 'quick' ? (
-            <div className="feedback">{feedback || '…'}</div>
+            <div className="feedback" aria-live="polite" aria-busy={loading}>
+              {feedback || '…'}
+            </div>
           ) : (
-            <div className="feedback ack">Answer recorded.</div>
+            <div className="feedback ack" aria-live="polite">Answer recorded.</div>
           )}
           <div className="actions">
             <button onClick={next} disabled={loading}>
@@ -173,13 +240,61 @@ function SessionScreen({ session, onSubmit, onSkip, onRetry, onNext, onEndEarly 
   )
 }
 
-function SummaryScreen({ summary, error, onRestart }) {
+function ConfidenceCheckIn({ onRate }) {
+  const [rating, setRating] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const choose = async (value) => {
+    setSaving(true)
+    setError('')
+    try {
+      await onRate(value)
+      setRating(value)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (rating) {
+    return <p className="hint" role="status">Thanks — saved to your progress.</p>
+  }
+
+  return (
+    <fieldset className="check-in">
+      <legend>How confident do you feel after this session?</legend>
+      <div className="rating">
+        {[1, 2, 3, 4, 5].map((value) => (
+          <button key={value} type="button" className="secondary" onClick={() => choose(value)} disabled={saving}>
+            <span className="rating-value">{value}</span>
+            <span className="rating-label">{CONFIDENCE_LABELS[value]}</span>
+          </button>
+        ))}
+      </div>
+      {error && <p className="error" role="alert">{error}</p>}
+    </fieldset>
+  )
+}
+
+function SummaryScreen({ summary, error, done, canRate, onRate, onRestart, onViewProgress }) {
   return (
     <div className="summary">
       <h1>Session summary</h1>
-      {(summary || !error) && <div className="summary-text">{summary || '…'}</div>}
+      {(summary || !error) && (
+        <div className="summary-text" aria-live="polite" aria-busy={!done}>
+          {summary || '…'}
+        </div>
+      )}
       {error && <p className="error" role="alert">{error}</p>}
-      <button onClick={onRestart}>Start another session</button>
+      {done && canRate && !error && <ConfidenceCheckIn onRate={onRate} />}
+      <div className="actions">
+        <button onClick={onRestart}>Start another session</button>
+        <button onClick={onViewProgress} className="secondary">
+          View your progress
+        </button>
+      </div>
     </div>
   )
 }
@@ -190,16 +305,24 @@ function App() {
   const [session, setSession] = useState(null)
   const [summary, setSummary] = useState('')
   const [summaryError, setSummaryError] = useState('')
+  const [summaryDone, setSummaryDone] = useState(false)
+  const [canRate, setCanRate] = useState(false)
+
+  const firstStage = (s) => (s.breathing ? 'breathing' : 'answering')
 
   const handleStart = async (config) => {
-    const data = await startSession(config)
+    const { breathing, showProgress, ...sessionConfig } = config
+    const data = await startSession(sessionConfig)
     setSessionId(data.session_id)
     setSession({
       mode: config.mode,
+      track: config.track,
+      breathing,
+      showProgress,
       question: data.question,
       index: data.index,
       total: data.total,
-      stage: 'answering',
+      stage: breathing ? 'breathing' : 'answering',
       feedback: '',
     })
     setScreen('session')
@@ -207,8 +330,11 @@ function App() {
 
   const goToSummary = async () => {
     const res = await endSession(sessionId)
+    // The backend only saves sessions where at least one question was answered or skipped.
+    setCanRate(session.index > 0 || session.stage === 'reviewing')
     setSummary('')
     setSummaryError('')
+    setSummaryDone(false)
     setScreen('summary')
     try {
       if (session.mode === 'full') {
@@ -219,6 +345,8 @@ function App() {
       }
     } catch (err) {
       setSummaryError(err.message)
+    } finally {
+      setSummaryDone(true)
     }
   }
 
@@ -233,9 +361,13 @@ function App() {
       question: meta.question,
       index: meta.index,
       total: meta.total,
-      stage: 'answering',
+      stage: firstStage(s),
       feedback: '',
     }))
+  }
+
+  const handleReady = () => {
+    setSession((s) => ({ ...s, stage: 'answering' }))
   }
 
   const handleSubmit = async (answerText) => {
@@ -266,17 +398,20 @@ function App() {
     await advance(res)
   }
 
+  const handleRate = (confidence) => rateSession(sessionId, confidence)
+
   const handleRestart = () => {
     setSessionId(null)
     setSession(null)
     setSummary('')
     setSummaryError('')
+    setSummaryDone(false)
     setScreen('setup')
   }
 
   return (
     <section id="center">
-      {screen === 'setup' && <SetupScreen onStart={handleStart} />}
+      {screen === 'setup' && <SetupScreen onStart={handleStart} onViewProgress={() => setScreen('history')} />}
       {screen === 'session' && session && (
         <SessionScreen
           session={session}
@@ -285,9 +420,21 @@ function App() {
           onRetry={handleRetry}
           onNext={handleNext}
           onEndEarly={goToSummary}
+          onReady={handleReady}
         />
       )}
-      {screen === 'summary' && <SummaryScreen summary={summary} error={summaryError} onRestart={handleRestart} />}
+      {screen === 'summary' && (
+        <SummaryScreen
+          summary={summary}
+          error={summaryError}
+          done={summaryDone}
+          canRate={canRate}
+          onRate={handleRate}
+          onRestart={handleRestart}
+          onViewProgress={() => setScreen('history')}
+        />
+      )}
+      {screen === 'history' && <HistoryScreen onBack={handleRestart} />}
     </section>
   )
 }

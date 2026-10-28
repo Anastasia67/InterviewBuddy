@@ -1,13 +1,17 @@
 const API_BASE = 'http://127.0.0.1:8000'
 
-async function post(path, body) {
+function post(path, body) {
+  return request(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+async function request(path, options) {
   let res
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    res = await fetch(`${API_BASE}${path}`, options)
   } catch {
     throw new Error("Couldn't reach the server. Is the backend running?")
   }
@@ -35,6 +39,14 @@ export function sendAnswerAction({ sessionId, action, answer }) {
 
 export function endSession(sessionId) {
   return post('/session/end', { session_id: sessionId })
+}
+
+export function getHistory() {
+  return request('/history').then((res) => res.json())
+}
+
+export function rateSession(sessionId, confidence) {
+  return post(`/history/${sessionId}/confidence`, { confidence })
 }
 
 export async function streamText(response, onChunk) {

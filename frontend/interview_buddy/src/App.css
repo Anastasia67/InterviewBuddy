@@ -9,7 +9,8 @@
 
 .setup,
 .session,
-.summary {
+.summary,
+.history {
   width: 100%;
   max-width: 480px;
   display: flex;
@@ -108,4 +109,203 @@ button.link {
 .feedback.ack {
   color: var(--text);
   min-height: 0;
+}
+
+.setup label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.setup label.checkbox input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+/* Breathing pause */
+
+.breathing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.breath-circle {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  border: 2px solid var(--accent-border);
+  animation: breathe 8s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(0.6);
+  }
+  50% {
+    transform: scale(1);
+  }
+}
+
+.breath-label {
+  font-size: 20px;
+  color: var(--text-h);
+  margin: 0;
+}
+
+/* Voice input */
+
+button.active {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.listening {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--accent);
+  margin: 0;
+}
+
+.listening-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Confidence check-in */
+
+.check-in {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px 16px;
+  margin: 0;
+}
+
+.check-in legend {
+  padding: 0 6px;
+  color: var(--text-h);
+}
+
+.rating {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.rating button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+}
+
+.rating-value {
+  font-size: 18px;
+  color: var(--text-h);
+}
+
+.rating-label {
+  font-size: 12px;
+}
+
+/* Progress screen */
+
+.history h2 {
+  font-size: 18px;
+  margin: 8px 0;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--code-bg);
+}
+
+.stat-value {
+  font-size: 28px;
+  color: var(--text-h);
+}
+
+.stat-label {
+  font-size: 13px;
+}
+
+.confidence-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 100px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.confidence-bar {
+  flex: 1;
+  max-width: 32px;
+  border-radius: 4px 4px 0 0;
+  background: var(--accent);
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-list details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.history-list summary {
+  cursor: pointer;
+  color: var(--text-h);
+  font-size: 15px;
+}
+
+.history-meta {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.history-list .summary-text {
+  margin-top: 10px;
+  font-size: 15px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .breath-circle,
+  .listening-dot {
+    animation: none;
+  }
 }
